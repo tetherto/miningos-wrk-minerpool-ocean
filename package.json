@@ -1,0 +1,38 @@
+{
+  "name": "miningos-wrk-minerpool-ocean",
+  "version": "0.0.1",
+  "description": "Ocean mining pool worker",
+  "keywords": [
+    "tether"
+  ],
+  "author": "Tether",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tetherto/miningos-wrk-minerpool-ocean.git"
+  },
+  "engine": {
+    "node": ">=20.0"
+  },
+  "scripts": {
+    "lint": "standard",
+    "lint:fix": "standard --fix",
+    "test": "npm run lint && npm run test:unit",
+    "test:unit": "brittle tests/unit/*.js",
+    "test:coverage": "brittle --coverage tests/{,**/}*.test.js"
+  },
+  "dependencies": {
+    "bfx-facs-http": "git+https://github.com/bitfinexcom/bfx-facs-http.git",
+    "bfx-facs-scheduler": "git+https://github.com/bitfinexcom/bfx-facs-scheduler.git",
+    "lib-js-util-base": "git+https://github.com/bitfinexcom/lib-js-util-base.git",
+    "mingo": "6.5.6",
+    "tether-wrk-base": "git+https://github.com/tetherto/tether-wrk-base.git"
+  },
+  "devDependencies": {
+    "brittle": "3.16.3",
+    "debug": "4.3.4",
+    "fastify": "4.29.1",
+    "standard": "17.1.2",
+    "yargs": "17.7.2"
+  }
+}

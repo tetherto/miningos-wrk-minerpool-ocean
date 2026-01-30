@@ -4,7 +4,7 @@ const async = require('async')
 const TetherWrkBase = require('tether-wrk-base/workers/base.wrk.tether')
 const { OceanMinerPoolApi } = require('./lib/ocean.minerpool.api')
 const { getWorkersStats, getTimeRanges, convertMsToSeconds, isCurrentMonth, getMonthlyDateRanges } = require('./lib/utils')
-const { BTC_SATS, SCHEDULER_TIMES, POOL_TYPE } = require('./lib/constants')
+const { BTC_SATS, SCHEDULER_TIMES, POOL_TYPE, MINUTE_MS, HOUR_MS, HOURS_24_MS } = require('./lib/constants')
 const utilsStore = require('hp-svc-facs-store/utils')
 const gLibUtilBase = require('lib-js-util-base')
 const mingo = require('mingo')
@@ -255,6 +255,43 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     return { ts: Date.now(), hourlyRevenues }
   }
 
+  _getIntervalMs (interval) {
+    switch (interval) {
+      case '1D':
+        return HOURS_24_MS
+      case '3h':
+        return 3 * HOUR_MS
+      case '30m':
+        return 30 * MINUTE_MS
+      case '5m':
+      default:
+        return 5 * MINUTE_MS
+    }
+  }
+
+  _aggrHashrate (s, d) {
+    return {
+      ...d,
+      hashrate: (s.hashrate + d.hashrate) / 2
+    }
+  }
+
+  _aggrByInterval (data, interval) {
+    const intervalMs = this._getIntervalMs(interval)
+    const aggrData = {}
+    data.forEach(d => {
+      const aggrTimestamp = Math.ceil(d.ts / intervalMs) * intervalMs
+      if (!aggrData[aggrTimestamp]) {
+        aggrData[aggrTimestamp] = { ...d, ts: aggrTimestamp }
+      } else {
+        aggrData[aggrTimestamp].stats = aggrData[aggrTimestamp].stats.map(
+          (s, index) => this._aggrHashrate(s, d.stats[index])
+        )
+      }
+    })
+    return Object.values(aggrData)
+  }
+
   async getYearlyBalances (username) {
     // fetch transactions of last 12 months, skip the ones already fetched unless current month
     const yearlyDateRanges = getMonthlyDateRanges(12)
@@ -375,6 +412,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         break
       case 'stats-history':
         data = await this.getDbData(this.statsDb, query)
+        if (query.interval) data = this._aggrByInterval(data, query.interval)
         data.forEach(d => { if (d.stats) d.stats = this.appendPoolType(d.stats) })
         break
       default:

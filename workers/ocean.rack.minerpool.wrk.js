@@ -4,7 +4,7 @@ const async = require('async')
 const TetherWrkBase = require('tether-wrk-base/workers/base.wrk.tether')
 const { OceanMinerPoolApi } = require('./lib/ocean.minerpool.api')
 const { getWorkersStats, getTimeRanges, convertMsToSeconds, isCurrentMonth, getMonthlyDateRanges } = require('./lib/utils')
-const { BTC_SATS, SCHEDULER_TIMES, POOL_TYPE } = require('./lib/constants')
+const { BTC_SATS, SCHEDULER_TIMES, POOL_TYPE, MINUTE_MS, HOUR_MS, HOURS_24_MS } = require('./lib/constants')
 const utilsStore = require('hp-svc-facs-store/utils')
 const gLibUtilBase = require('lib-js-util-base')
 const mingo = require('mingo')
@@ -255,6 +255,50 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     return { ts: Date.now(), hourlyRevenues }
   }
 
+  _getIntervalMs (interval) {
+    switch (interval) {
+      case '1D':
+        return HOURS_24_MS
+      case '3h':
+        return 3 * HOUR_MS
+      case '30m':
+        return 30 * MINUTE_MS
+      case '5m':
+      default:
+        return 5 * MINUTE_MS
+    }
+  }
+
+  _avg (avg, value, count) {
+    return (avg * (count - 1) + value) / count
+  }
+
+  _aggrByInterval (data, interval) {
+    const intervalMs = this._getIntervalMs(interval)
+    const aggrBuckets = {}
+
+    // Bucket data points by interval
+    data.forEach(d => {
+      const aggrTimestamp = Math.ceil(d.ts / intervalMs) * intervalMs
+      if (!aggrBuckets[aggrTimestamp]) {
+        aggrBuckets[aggrTimestamp] = []
+      }
+      aggrBuckets[aggrTimestamp].push(d)
+    })
+
+    // For each bucket, calculate average of hashrate
+    return Object.entries(aggrBuckets).map(([ts, items]) => {
+      return items.reduce((acc, d, itemIndex) => {
+        d.stats = d.stats.map((stat, statsIndex) => {
+          const avgHashrate = acc?.stats?.[statsIndex]?.hashrate || 0
+          const hashrate = this._avg(avgHashrate, stat.hashrate, itemIndex + 1)
+          return { ...stat, hashrate }
+        })
+        return { ...acc, ...d, ts: Number(ts) }
+      }, {})
+    })
+  }
+
   async getYearlyBalances (username) {
     // fetch transactions of last 12 months, skip the ones already fetched unless current month
     const yearlyDateRanges = getMonthlyDateRanges(12)
@@ -375,6 +419,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         break
       case 'stats-history':
         data = await this.getDbData(this.statsDb, query)
+        if (query.interval) data = this._aggrByInterval(data, query.interval)
         data.forEach(d => { if (d.stats) d.stats = this.appendPoolType(d.stats) })
         break
       default:

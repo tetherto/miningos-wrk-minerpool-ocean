@@ -269,27 +269,34 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     }
   }
 
-  _aggrHashrate (s, d) {
-    return {
-      ...d,
-      hashrate: (s.hashrate + d.hashrate) / 2
-    }
+  _avg (avg, value, count) {
+    return (avg * (count - 1) + value) / count
   }
 
   _aggrByInterval (data, interval) {
     const intervalMs = this._getIntervalMs(interval)
-    const aggrData = {}
+    const aggrBuckets = {}
+
+    // Bucket data points by interval
     data.forEach(d => {
       const aggrTimestamp = Math.ceil(d.ts / intervalMs) * intervalMs
-      if (!aggrData[aggrTimestamp]) {
-        aggrData[aggrTimestamp] = { ...d, ts: aggrTimestamp }
-      } else {
-        aggrData[aggrTimestamp].stats = aggrData[aggrTimestamp].stats.map(
-          (s, index) => this._aggrHashrate(s, d.stats[index])
-        )
+      if (!aggrBuckets[aggrTimestamp]) {
+        aggrBuckets[aggrTimestamp] = []
       }
+      aggrBuckets[aggrTimestamp].push(d)
     })
-    return Object.values(aggrData)
+
+    // For each bucket, calculate average of hashrate
+    return Object.entries(aggrBuckets).map(([ts, items]) => {
+      return items.reduce((acc, d, itemIndex) => {
+        d.stats = d.stats.map((stat, statsIndex) => {
+          const avgHashrate = acc?.stats?.[statsIndex]?.hashrate || 0
+          const hashrate = this._avg(avgHashrate, stat.hashrate, itemIndex + 1)
+          return { ...stat, hashrate }
+        })
+        return { ...acc, ...d, ts: Number(ts) }
+      }, {})
+    })
   }
 
   async getYearlyBalances (username) {

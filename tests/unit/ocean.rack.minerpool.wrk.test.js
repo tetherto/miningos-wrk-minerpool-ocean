@@ -2,7 +2,19 @@
 
 const test = require('brittle')
 const WrkMinerPoolRackOcean = require('../../workers/ocean.rack.minerpool.wrk')
-const { POOL_TYPE } = require('../../workers/lib/constants')
+const { POOL_TYPE, SCHEDULER_TIMES } = require('../../workers/lib/constants')
+
+function mockDbStream (rows) {
+  return {
+    createReadStream () {
+      return (async function * () {
+        for (const row of rows) {
+          yield { value: Buffer.from(JSON.stringify(row)) }
+        }
+      })()
+    }
+  }
+}
 
 function createMockWorker () {
   const mockCtx = {
@@ -20,6 +32,7 @@ function createMockWorker () {
   const worker = Object.create(WrkMinerPoolRackOcean.prototype)
   worker.ctx = mockCtx
   worker.conf = mockConf
+  worker.accounts = mockConf.ocean.accounts
   worker.wtype = 'ocean'
   worker.prefix = 'ocean-rack-1'
   worker.data = {
@@ -362,4 +375,373 @@ test('_projection: should return all fields when fields is empty', (t) => {
   t.ok(Array.isArray(result))
   t.ok(result[0].id)
   t.ok(result[0].name)
+})
+
+test('_aggrByInterval: uses 1D interval bucket size', (t) => {
+  const worker = createMockWorker()
+  const day = 24 * 60 * 60 * 1000
+  const base = Date.UTC(2024, 0, 1, 0, 0, 0)
+  const data = [
+    { ts: base + day / 2, stats: [{ hashrate: 100 }] },
+    { ts: base + day / 2 + 1000, stats: [{ hashrate: 300 }] }
+  ]
+  const result = worker._aggrByInterval(data, '1D')
+  t.is(result.length, 1)
+  t.is(result[0].stats[0].hashrate, 200)
+})
+
+test('_aggrByInterval: uses 3h and 30m intervals', (t) => {
+  const worker = createMockWorker()
+  const t0 = Date.UTC(2024, 0, 1, 0, 0, 0)
+  const d3h = [
+    { ts: t0 + 1000, stats: [{ hashrate: 10 }] },
+    { ts: t0 + 2000, stats: [{ hashrate: 30 }] }
+  ]
+  const r3 = worker._aggrByInterval(d3h, '3h')
+  t.ok(r3.length >= 1)
+
+  const d30 = [
+    { ts: t0 + 1000, stats: [{ hashrate: 5 }] },
+    { ts: t0 + 2000, stats: [{ hashrate: 15 }] }
+  ]
+  const r30 = worker._aggrByInterval(d30, '30m')
+  t.ok(r30.length >= 1)
+  t.is(r30[0].stats[0].hashrate, 10)
+})
+
+test('_aggrByInterval: unknown interval defaults to 5m bucket', (t) => {
+  const worker = createMockWorker()
+  const t0 = Date.UTC(2024, 0, 1, 0, 0, 0)
+  const data = [
+    { ts: t0 + 1000, stats: [{ hashrate: 100 }] },
+    { ts: t0 + 2000, stats: [{ hashrate: 200 }] }
+  ]
+  const def = worker._aggrByInterval(data, 'bogus')
+  const five = worker._aggrByInterval(data, '5m')
+  t.is(def.length, five.length)
+  t.is(def[0].ts, five[0].ts)
+})
+
+test('getDbData: rejects missing start or end', async (t) => {
+  const worker = createMockWorker()
+  worker.getDbData = WrkMinerPoolRackOcean.prototype.getDbData
+  const db = mockDbStream([])
+
+  await t.exception(async () => {
+    await worker.getDbData(db, { end: 100 })
+  }, /ERR_START_INVALID/)
+
+  await t.exception(async () => {
+    await worker.getDbData(db, { start: 1 })
+  }, /ERR_END_INVALID/)
+})
+
+test('getDbData: reads stream entries', async (t) => {
+  const worker = createMockWorker()
+  worker.getDbData = WrkMinerPoolRackOcean.prototype.getDbData
+  const db = mockDbStream([{ a: 1 }, { b: 2 }])
+  const rows = await worker.getDbData(db, { start: 1, end: 9999999999 })
+  t.is(rows.length, 2)
+  t.is(rows[0].a, 1)
+})
+
+test('getWorkers: without start/end uses in-memory workersData', async (t) => {
+  const worker = createMockWorker()
+  worker.getWorkers = WrkMinerPoolRackOcean.prototype.getWorkers
+  worker.data.workersData = {
+    ts: 500,
+    workers: [{ id: 'w1', name: 'n1' }, { id: 'w2', name: 'n2' }]
+  }
+  const res = await worker.getWorkers({ offset: 0, limit: 1 })
+  t.is(res.ts, 0)
+  t.is(res.workers.length, 1)
+  t.is(res.workers[0].poolType, POOL_TYPE)
+})
+
+test('getWorkers: with start/end aggregates from db', async (t) => {
+  const worker = createMockWorker()
+  worker.getDbData = WrkMinerPoolRackOcean.prototype.getDbData
+  worker.getWorkers = WrkMinerPoolRackOcean.prototype.getWorkers
+  worker.workersDb = mockDbStream([
+    { ts: 100, workers: [{ name: 'a', id: 1 }, { name: 'b', id: 2 }] }
+  ])
+  const byName = await worker.getWorkers({ start: 1, end: 9999999999, name: 'a' })
+  t.is(byName.length, 1)
+  t.is(byName[0].workers.length, 1)
+  t.is(byName[0].workers[0].poolType, POOL_TYPE)
+
+  worker.workersDb = mockDbStream([
+    { ts: 200, workers: [{ name: 'x', id: 1 }, { name: 'y', id: 2 }, { name: 'z', id: 3 }] }
+  ])
+  const sliced = await worker.getWorkers({ start: 1, end: 9999999999, offset: 0, limit: 2 })
+  t.is(sliced[0].workers.length, 2)
+})
+
+test('getWrkExtData: validates query and key', async (t) => {
+  const worker = createMockWorker()
+  worker.getWrkExtData = WrkMinerPoolRackOcean.prototype.getWrkExtData
+
+  await t.exception(async () => {
+    await worker.getWrkExtData({})
+  }, /ERR_QUERY_INVALID/)
+
+  await t.exception(async () => {
+    await worker.getWrkExtData({ query: {} })
+  }, /ERR_KEY_INVALID/)
+})
+
+test('getWrkExtData: transactions, workers-count, default data key', async (t) => {
+  const worker = createMockWorker()
+  worker.getDbData = WrkMinerPoolRackOcean.prototype.getDbData
+  worker.getWorkers = WrkMinerPoolRackOcean.prototype.getWorkers
+  worker.getWrkExtData = WrkMinerPoolRackOcean.prototype.getWrkExtData
+  worker._aggrTransactions = WrkMinerPoolRackOcean.prototype._aggrTransactions
+
+  worker.transactionsDb = mockDbStream([{ ts: 1, transactions: [{ satoshis_net_earned: 100 }] }])
+  let tx = await worker.getWrkExtData({ query: { key: 'transactions', start: 1, end: 2 } })
+  t.is(tx.length, 1)
+
+  const start = new Date('2024-01-01T00:00:00Z').getTime()
+  const end = new Date('2024-01-01T02:00:00Z').getTime()
+  tx = await worker.getWrkExtData({ query: { key: 'transactions', start, end, aggrHourly: true } })
+  t.ok(tx.hourlyRevenues)
+
+  worker.workersCountDb = mockDbStream([{ ts: 1, count: 3 }])
+  const wc = await worker.getWrkExtData({ query: { key: 'workers-count', start: 1, end: 2 } })
+  t.is(wc.length, 1)
+
+  worker.data.customKey = { hello: 1 }
+  const def = await worker.getWrkExtData({ query: { key: 'customKey' } })
+  t.is(def.hello, 1)
+})
+
+test('getWrkExtData: blocks pool and monthly aggregation', async (t) => {
+  const worker = createMockWorker()
+  worker.getDbData = WrkMinerPoolRackOcean.prototype.getDbData
+  worker.getWrkExtData = WrkMinerPoolRackOcean.prototype.getWrkExtData
+  worker._getBlocksMonthlyAggr = WrkMinerPoolRackOcean.prototype._getBlocksMonthlyAggr
+  worker._getPoolBlocks = WrkMinerPoolRackOcean.prototype._getPoolBlocks
+
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = now.getMonth()
+  worker.blocksDb = mockDbStream([
+    {
+      ts: new Date(y, m, 5).getTime(),
+      networkDifficulty: 100,
+      poolShares: 50,
+      luck: 2,
+      username: 'u1'
+    }
+  ])
+
+  const pool = await worker.getWrkExtData({ query: { key: 'blocks', start: 1, end: 9999999999999 } })
+  t.ok(pool.blocksData)
+  t.ok(pool.blocksData.blocks)
+
+  const monthly = await worker.getWrkExtData({
+    query: { key: 'blocks', start: 1, end: 9999999999999, aggrMonthly: true }
+  })
+  t.ok(monthly.blocksData)
+})
+
+test('getWrkExtData: workers and stats branches', async (t) => {
+  const worker = createMockWorker()
+  worker.getDbData = WrkMinerPoolRackOcean.prototype.getDbData
+  worker.getWorkers = WrkMinerPoolRackOcean.prototype.getWorkers
+  worker.getWrkExtData = WrkMinerPoolRackOcean.prototype.getWrkExtData
+  worker._aggrByInterval = WrkMinerPoolRackOcean.prototype._aggrByInterval
+  worker._avg = WrkMinerPoolRackOcean.prototype._avg
+  worker._getIntervalMs = WrkMinerPoolRackOcean.prototype._getIntervalMs
+
+  worker.data.workersData = { ts: 1, workers: [{ id: 'w', name: 'w' }] }
+  const w = await worker.getWrkExtData({ query: { key: 'workers', offset: 0, limit: 10 } })
+  t.is(w.workers[0].poolType, POOL_TYPE)
+
+  worker.data.statsData = { ts: 99, stats: [{ username: 'u' }] }
+  const st = await worker.getWrkExtData({ query: { key: 'stats' } })
+  t.is(st.stats[0].poolType, POOL_TYPE)
+
+  const t0 = Date.UTC(2024, 0, 1, 0, 0, 0)
+  worker.statsDb = mockDbStream([
+    { ts: t0 + 60 * 1000, stats: [{ username: 'a', hashrate: 100 }] },
+    { ts: t0 + 120 * 1000, stats: [{ username: 'a', hashrate: 200 }] }
+  ])
+  const hist = await worker.getWrkExtData({
+    query: { key: 'stats-history', start: 1, end: 9999999999999, interval: '5m' }
+  })
+  t.ok(Array.isArray(hist))
+  t.ok(hist[0].stats[0].poolType)
+})
+
+test('getWrkExtData: applies field projection when fields set', async (t) => {
+  const worker = createMockWorker()
+  worker.getWrkExtData = WrkMinerPoolRackOcean.prototype.getWrkExtData
+  worker.data.statsData = { ts: 1, stats: [{ username: 'u', extra: 1 }] }
+  const res = await worker.getWrkExtData({
+    query: { key: 'stats', fields: { username: 1, poolType: 1 } }
+  })
+  t.ok(res != null)
+  t.ok(typeof res === 'object')
+})
+
+test('fetchData: dispatches scheduler keys', async (t) => {
+  const worker = createMockWorker()
+  worker.fetchData = WrkMinerPoolRackOcean.prototype.fetchData
+
+  const calls = []
+  worker.fetchStats = async () => { calls.push('1m') }
+  await worker.fetchData(SCHEDULER_TIMES._1M.key, new Date())
+  t.ok(calls.includes('1m'))
+
+  calls.length = 0
+  worker.fetchWorkers = async () => { calls.push('fw') }
+  worker.saveStats = async () => { calls.push('ss') }
+  await worker.fetchData(SCHEDULER_TIMES._5M.key, new Date())
+  t.ok(calls.includes('fw') && calls.includes('ss'))
+
+  calls.length = 0
+  worker.fetchTransactions = async () => { calls.push('ft') }
+  worker.fetchBlocks = async () => { calls.push('fb') }
+  worker.saveWorkers = async () => { calls.push('sw') }
+  await worker.fetchData(SCHEDULER_TIMES._1D.key, new Date())
+  t.ok(calls.includes('ft') && calls.includes('fb') && calls.includes('sw'))
+})
+
+test('fetchData: swallows errors from fetchers', async (t) => {
+  const worker = createMockWorker()
+  worker.fetchData = WrkMinerPoolRackOcean.prototype.fetchData
+  worker.fetchStats = async () => { throw new Error('fail') }
+  worker._logErr = () => {}
+  await worker.fetchData(SCHEDULER_TIMES._1M.key, new Date())
+  t.pass()
+})
+
+test('fetchStats: builds statsData for each account', async (t) => {
+  const worker = createMockWorker()
+  worker.oceanApi = {
+    getHashRateInfo: async () => ({
+      hashrate_60s: '10',
+      hashrate_3600s: '20',
+      hashrate_86400s: '30',
+      active_worker_count: 2
+    })
+  }
+  worker.getEarnings = async () => ({ revenue: 1, income: 0.5, unsettled: 0.5 })
+  worker.getYearlyBalances = async () => ([{ month: '1-2025', balance: 0.1 }])
+  worker.data.workersData = { workers: [{ id: 'w1' }] }
+  worker.fetchStats = WrkMinerPoolRackOcean.prototype.fetchStats
+
+  await worker.fetchStats(new Date('2024-06-15T12:00:00.000Z'))
+  t.is(worker.data.statsData.stats.length, 2)
+  t.is(worker.data.statsData.stats[0].username, 'user1')
+  t.ok(worker.data.statsData.stats[0].yearlyBalances)
+})
+
+test('fetchWorkers: merges workers; logs per-account failures', async (t) => {
+  const worker = createMockWorker()
+  worker.accounts = ['bad', 'good']
+  worker.oceanApi = {
+    getWorkers: async (username) => {
+      if (username === 'bad') throw new Error('nope')
+      return {
+        snap_ts: 1000,
+        workers: {
+          w1: [{ hashrate_60s: '1', hashrate_3600s: '2', hashrate_86400s: '3' }]
+        }
+      }
+    }
+  }
+  worker._saveToDb = async () => {}
+  worker.workersCountDb = {}
+  worker.fetchWorkers = WrkMinerPoolRackOcean.prototype.fetchWorkers
+
+  await worker.fetchWorkers(new Date('2024-06-15T12:00:00.000Z'))
+  t.ok(worker.data.workersData.workers.length >= 1)
+})
+
+test('fetchTransactions and fetchBlocks', async (t) => {
+  const worker = createMockWorker()
+  worker._saveToDb = async () => {}
+  worker.transactionsDb = {}
+  worker.blocksDb = {}
+  worker.fetchTransactions = WrkMinerPoolRackOcean.prototype.fetchTransactions
+  worker.fetchBlocks = WrkMinerPoolRackOcean.prototype.fetchBlocks
+
+  worker.oceanApi = {
+    getTransactions: async () => ({}),
+    getBlocks: async () => ({})
+  }
+  await worker.fetchTransactions()
+  await worker.fetchBlocks()
+
+  worker.oceanApi = {
+    getTransactions: async () => ({ earnings: [{ satoshis_net_earned: 10 }] }),
+    getBlocks: async () => ({
+      blocks: [{
+        ts: new Date().toISOString(),
+        block_hash: 'h',
+        network_difficulty: 2,
+        accepted_shares: 1,
+        total_reward_sats: 100000000,
+        username: 'u'
+      }]
+    })
+  }
+  await worker.fetchTransactions()
+  await worker.fetchBlocks()
+  t.pass()
+})
+
+test('saveStats and saveWorkers write to db', async (t) => {
+  const worker = createMockWorker()
+  worker.statsDb = {}
+  worker.workersDb = {}
+  worker.data.statsData = { stats: [{ u: 1 }] }
+  worker.data.workersData = { workers: [{ w: 1 }] }
+  const saved = []
+  worker._saveToDb = async (db, ts, payload) => {
+    saved.push({ db, payload })
+  }
+  worker.saveStats = WrkMinerPoolRackOcean.prototype.saveStats
+  worker.saveWorkers = WrkMinerPoolRackOcean.prototype.saveWorkers
+  const time = new Date('2024-06-15T12:34:56.789Z')
+  await worker.saveStats(time)
+  await worker.saveWorkers(time)
+  t.is(saved.length, 2)
+  t.ok(saved[0].payload.stats)
+  t.ok(saved[1].payload.workers)
+})
+
+test('getEarnings: uses oceanApi payload (sync return)', async (t) => {
+  const worker = createMockWorker()
+  worker.oceanApi = {
+    getEarnings: () => ({
+      earnings: [{ satoshis_net_earned: 100000000 }],
+      payouts: [{ total_satoshis_net_paid: 25000000 }]
+    })
+  }
+  worker.getEarnings = WrkMinerPoolRackOcean.prototype.getEarnings
+  const r = await worker.getEarnings('user1')
+  t.is(r.revenue, 1)
+  t.is(r.income, 25000000)
+})
+
+test('getYearlyBalances: fills balances; handles api errors', async (t) => {
+  const worker = createMockWorker()
+  worker.data.yearlyBalances = {}
+  worker._logErr = () => {}
+  worker.oceanApi = {
+    getMonthlyEarnings: async () => ({ report: [{ NetUserRwd: '50000000' }] })
+  }
+  worker.getYearlyBalances = WrkMinerPoolRackOcean.prototype.getYearlyBalances
+  const ok = await worker.getYearlyBalances('u1')
+  t.ok(ok.length >= 1)
+
+  worker.data.yearlyBalances = {}
+  worker.oceanApi = {
+    getMonthlyEarnings: async () => { throw new Error('down') }
+  }
+  const bad = await worker.getYearlyBalances('u2')
+  t.ok(Array.isArray(bad))
 })

@@ -11,9 +11,23 @@
     "type": "git",
     "url": "git+https://github.com/tetherto/miningos-wrk-minerpool-ocean.git"
   },
-  "engine": {
-    "node": ">=20.0"
+  "homepage": "https://github.com/tetherto/miningos-wrk-minerpool-ocean#readme",
+  "bugs": {
+    "url": "https://github.com/tetherto/miningos-wrk-minerpool-ocean/issues"
+  },  
+  "engines": {
+    "node": ">=20"
   },
+  "files": [
+    "worker.js",
+    "workers/",
+    "mock/"
+  ],
+  "main": "worker.js",  
+  "type": "commonjs",
+  "bin": {
+    "miningos-wrk-minerpool-ocean": "worker.js"
+  },   
   "scripts": {
     "lint": "standard",
     "lint:fix": "standard --fix",

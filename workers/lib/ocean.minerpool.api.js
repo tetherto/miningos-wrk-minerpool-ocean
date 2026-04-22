@@ -39,6 +39,4 @@ class OceanMinerPoolApi {
   }
 }
 
-module.exports = {
-  OceanMinerPoolApi
-}
+module.exports = OceanMinerPoolApi

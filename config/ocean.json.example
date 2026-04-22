@@ -1,4 +1,9 @@
 {
-  "apiUrl": "https://api.ocean.xyz",
-  "accounts":[]
+  "apiUrl": "http://127.0.0.1:8000",
+  "accounts":[],
+  "datum": {
+    "apiUrl": "http://127.0.0.1:7152",
+    "user": "",
+    "password": ""
+  }
 }

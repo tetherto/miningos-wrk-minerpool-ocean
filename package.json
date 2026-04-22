@@ -11,28 +11,44 @@
     "type": "git",
     "url": "git+https://github.com/tetherto/miningos-wrk-minerpool-ocean.git"
   },
-  "engine": {
-    "node": ">=20.0"
+  "homepage": "https://github.com/tetherto/miningos-wrk-minerpool-ocean#readme",
+  "bugs": {
+    "url": "https://github.com/tetherto/miningos-wrk-minerpool-ocean/issues"
+  },  
+  "engines": {
+    "node": ">=20"
   },
+  "files": [
+    "worker.js",
+    "workers/",
+    "mock/"
+  ],
+  "main": "worker.js",  
+  "type": "commonjs",
+  "bin": {
+    "miningos-wrk-minerpool-ocean": "worker.js"
+  },   
   "scripts": {
     "lint": "standard",
     "lint:fix": "standard --fix",
     "test": "npm run lint && npm run test:unit && npm run test:integration",
     "test:unit": "brittle tests/unit/*.js",
     "test:integration": "brittle tests/integration/*.js",
-    "test:coverage": "brittle --coverage tests/**/*.test.js"
+    "test:coverage": "brittle --coverage tests/**/*.test.js",
+    "dev": "node worker.js --wtype wrk-minerpool-rack-ocean --env development --rack rack-1"
   },
   "dependencies": {
     "bfx-facs-http": "git+https://github.com/bitfinexcom/bfx-facs-http.git",
     "bfx-facs-scheduler": "git+https://github.com/bitfinexcom/bfx-facs-scheduler.git",
+    "digest-fetch": "3.1.1",
     "lib-js-util-base": "git+https://github.com/bitfinexcom/lib-js-util-base.git",
     "mingo": "6.5.6",
-    "tether-wrk-base": "git+https://github.com/tetherto/tether-wrk-base.git"
+    "@tetherto/tether-wrk-base": "git+https://github.com/tetherto/tether-wrk-base.git"
   },
   "devDependencies": {
     "brittle": "3.16.3",
     "debug": "4.3.4",
-    "fastify": "4.29.1",
+    "fastify": "5.8.5",
     "standard": "17.1.2",
     "yargs": "17.7.2"
   }

@@ -25,7 +25,12 @@ function createMockWorker () {
   const mockConf = {
     ocean: {
       accounts: ['user1', 'user2'],
-      apiUrl: 'https://api.test.com'
+      apiUrl: 'https://api.test.com',
+      datum: {
+        apiUrl: 'https://datum.test.com',
+        user: '',
+        password: ''
+      }
     }
   }
 
@@ -583,6 +588,109 @@ test('getWrkExtData: applies field projection when fields set', async (t) => {
   })
   t.ok(res != null)
   t.ok(typeof res === 'object')
+})
+
+test('getWrkExtData: datum-stats, stratum-info, stratum-job, thread-stats', async (t) => {
+  const worker = createMockWorker()
+  worker.getWrkExtData = WrkMinerPoolRackOcean.prototype.getWrkExtData
+  worker.getDatumStats = WrkMinerPoolRackOcean.prototype.getDatumStats
+  worker.getStratumInfo = WrkMinerPoolRackOcean.prototype.getStratumInfo
+  worker.getStratumJob = WrkMinerPoolRackOcean.prototype.getStratumJob
+  worker.getThreadStats = WrkMinerPoolRackOcean.prototype.getThreadStats
+  worker.datumApi = {
+    getDecentralizedClientStats: async () => ({ d: 1 }),
+    getStratumServerInfo: async () => ({ s: 2 }),
+    getCurrentStratumJob: async () => ({ j: 3 }),
+    getThreadStats: async () => ({ th: 4 })
+  }
+
+  const ds = await worker.getWrkExtData({ query: { key: 'datum-stats' } })
+  t.is(ds.d, 1)
+
+  const si = await worker.getWrkExtData({ query: { key: 'stratum-info' } })
+  t.is(si.s, 2)
+
+  const sj = await worker.getWrkExtData({ query: { key: 'stratum-job' } })
+  t.is(sj.j, 3)
+
+  const th = await worker.getWrkExtData({ query: { key: 'thread-stats' } })
+  t.is(th.th, 4)
+})
+
+test('getWrkExtData: stratum-list, coinbaser, datum-config', async (t) => {
+  const worker = createMockWorker()
+  worker.getWrkExtData = WrkMinerPoolRackOcean.prototype.getWrkExtData
+  worker.getStratumList = WrkMinerPoolRackOcean.prototype.getStratumList
+  worker.getCoinbaser = WrkMinerPoolRackOcean.prototype.getCoinbaser
+  worker.getDatumConfig = WrkMinerPoolRackOcean.prototype.getDatumConfig
+  worker.datumApi = {
+    getStratumList: async () => ({ list: true }),
+    getCoinbaser: async () => ({ coin: true }),
+    getConfiguration: async () => ({ cfg: true })
+  }
+
+  const list = await worker.getWrkExtData({ query: { key: 'stratum-list' } })
+  t.ok(list.list)
+
+  const coin = await worker.getWrkExtData({ query: { key: 'coinbaser' } })
+  t.ok(coin.coin)
+
+  const cfg = await worker.getWrkExtData({ query: { key: 'datum-config' } })
+  t.ok(cfg.cfg)
+})
+
+test('getDatumStats: returns undefined and logs on datumApi error', async (t) => {
+  const worker = createMockWorker()
+  worker.getDatumStats = WrkMinerPoolRackOcean.prototype.getDatumStats
+  worker._logErr = () => {}
+  worker.datumApi = {
+    getDecentralizedClientStats: async () => {
+      throw new Error('datum down')
+    }
+  }
+  const out = await worker.getDatumStats()
+  t.is(out, undefined)
+})
+
+test('getStratumList and getDatumConfig pass auth only when user or password set', async (t) => {
+  const worker = createMockWorker()
+  worker.getStratumList = WrkMinerPoolRackOcean.prototype.getStratumList
+  worker.getDatumConfig = WrkMinerPoolRackOcean.prototype.getDatumConfig
+  worker._logErr = () => {}
+
+  worker.conf.ocean.datum = { apiUrl: 'http://x', user: '', password: '' }
+  let listAuth
+  let cfgAuth
+  worker.datumApi = {
+    getStratumList: async (auth) => {
+      listAuth = auth
+      return { a: 1 }
+    },
+    getConfiguration: async (auth) => {
+      cfgAuth = auth
+      return { b: 2 }
+    }
+  }
+  await worker.getStratumList()
+  await worker.getDatumConfig()
+  t.is(listAuth, undefined)
+  t.is(cfgAuth, undefined)
+
+  worker.conf.ocean.datum = { apiUrl: 'http://x', user: 'u1', password: 'p1' }
+  worker.datumApi = {
+    getStratumList: async (auth) => {
+      t.is(auth.user, 'u1')
+      t.is(auth.password, 'p1')
+      return { c: 3 }
+    },
+    getConfiguration: async (auth) => {
+      t.is(auth.user, 'u1')
+      t.is(auth.password, 'p1')
+      return { d: 4 }
+    }
+  }
+  await worker.getStratumList()
+  await worker.getDatumConfig()
 })
 
 test('fetchData: dispatches scheduler keys', async (t) => {

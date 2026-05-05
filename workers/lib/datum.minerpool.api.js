@@ -29,6 +29,10 @@ class DatumApi {
     return resp
   }
 
+  async getDatumStats () {
+    return await this._request('/umbrel-api')
+  }
+
   async getDecentralizedClientStats () {
     return await this._request('/v1/decentralized_client_stats')
   }

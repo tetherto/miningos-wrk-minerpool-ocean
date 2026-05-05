@@ -594,11 +594,13 @@ test('getWrkExtData: datum-stats, stratum-info, stratum-job, thread-stats', asyn
   const worker = createMockWorker()
   worker.getWrkExtData = WrkMinerPoolRackOcean.prototype.getWrkExtData
   worker.getDatumStats = WrkMinerPoolRackOcean.prototype.getDatumStats
+  worker.getDatumClientStats = WrkMinerPoolRackOcean.prototype.getDatumClientStats
   worker.getStratumInfo = WrkMinerPoolRackOcean.prototype.getStratumInfo
   worker.getStratumJob = WrkMinerPoolRackOcean.prototype.getStratumJob
   worker.getThreadStats = WrkMinerPoolRackOcean.prototype.getThreadStats
   worker.datumApi = {
-    getDecentralizedClientStats: async () => ({ d: 1 }),
+    getDatumStats: async () => ({ d: 1 }),
+    getDecentralizedClientStats: async () => ({ dc: 11 }),
     getStratumServerInfo: async () => ({ s: 2 }),
     getCurrentStratumJob: async () => ({ j: 3 }),
     getThreadStats: async () => ({ th: 4 })
@@ -606,6 +608,9 @@ test('getWrkExtData: datum-stats, stratum-info, stratum-job, thread-stats', asyn
 
   const ds = await worker.getWrkExtData({ query: { key: 'datum-stats' } })
   t.is(ds.d, 1)
+
+  const dcs = await worker.getWrkExtData({ query: { key: 'datum-client-stats' } })
+  t.is(dcs.dc, 11)
 
   const si = await worker.getWrkExtData({ query: { key: 'stratum-info' } })
   t.is(si.s, 2)

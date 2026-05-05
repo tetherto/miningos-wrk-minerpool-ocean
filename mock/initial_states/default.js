@@ -1,6 +1,17 @@
 'use strict'
 
-const { generateMockBlocks, generateMockWorkers, generateMockTransactions } = require('./utils')
+const {
+  generateMockBlocks,
+  generateMockWorkers,
+  generateMockTransactions,
+  generateClientStats,
+  stratumServerInfo,
+  currentStratumJob,
+  coinbaser,
+  threadStats,
+  stratumClientList,
+  configuration
+} = require('./utils')
 
 module.exports = function (CTX) {
   const state = {
@@ -14,7 +25,14 @@ module.exports = function (CTX) {
       hashrate_1h: 100000000000000,
       hashrate_1d: 100000000000000,
       workers: 50
-    }
+    },
+    decentralized_client_stats: generateClientStats(),
+    stratum_server_info: stratumServerInfo(),
+    current_stratum_job: currentStratumJob(),
+    coinbaser: coinbaser(),
+    thread_stats: threadStats(),
+    stratum_client_list: stratumClientList(),
+    configuration: configuration()
   }
 
   const initialState = JSON.parse(JSON.stringify(state))

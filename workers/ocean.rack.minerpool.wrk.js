@@ -402,9 +402,17 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
 
   async getDatumStats () {
     try {
-      return await this.datumApi.getDecentralizedClientStats()
+      return await this.datumApi.getDatumStats()
     } catch (e) {
       this._logErr('ERR_DATUM_STATS_FETCH', e)
+    }
+  }
+
+  async getDatumClientStats () {
+    try {
+      return await this.datumApi.getDecentralizedClientStats()
+    } catch (e) {
+      this._logErr('ERR_DATUM_CLIENT_STATS_FETCH', e)
     }
   }
 
@@ -491,6 +499,9 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         break
       case 'datum-stats':
         data = await this.getDatumStats()
+        break
+      case 'datum-client-stats':
+        data = await this.getDatumClientStats()
         break
       case 'stratum-info':
         data = await this.getStratumInfo()

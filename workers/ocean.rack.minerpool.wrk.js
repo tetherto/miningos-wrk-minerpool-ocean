@@ -509,6 +509,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
       case 'stats':
         data = this.data.statsData
         if (data.stats) data.stats = this.appendPoolType(data.stats)
+        data.datum = (await this.getDatumStats()).datum
         break
       case 'stats-history':
         data = await this.getDbData(this.statsDb, query)

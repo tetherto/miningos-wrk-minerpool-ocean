@@ -96,14 +96,14 @@ function randomNumber (min = 0, max = 1) {
 }
 
 function getDatumStats () {
-  const randomHashrate = 100000000000000 + randomNumber() * 10000000000000
+  const randomHashrateThs = (100000000000000 + randomNumber() * 10000000000000) / 1000000000000
   return {
     type: 'three-stats',
     refresh: '30s',
     link: '',
     items: [
       { title: 'Connections', text: '10', subtext: 'Worker' },
-      { title: 'Hashrate', text: randomHashrate.toString(), subtext: 'Th/s' }
+      { title: 'Hashrate', text: randomHashrateThs.toString(), subtext: 'Th/s' }
     ]
   }
 }

@@ -1,7 +1,7 @@
 'use strict'
 
 const test = require('brittle')
-const { OceanMinerPoolApi } = require('../../workers/lib/ocean.minerpool.api')
+const OceanMinerPoolApi = require('../../workers/lib/ocean.minerpool.api')
 
 test('OceanMinerPoolApi: should create instance with http client', (t) => {
   const mockHttp = {

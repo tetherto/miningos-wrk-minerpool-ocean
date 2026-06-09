@@ -6,7 +6,9 @@ const {
   HOUR_MS,
   HOURS_24_MS,
   SCHEDULER_TIMES,
-  POOL_TYPE
+  POOL_TYPE,
+  DATUM_STATUS,
+  DATUM_OFFLINE_ERROR
 } = require('../../workers/lib/constants')
 
 test('constants: BTC_SATS should be correct', (t) => {
@@ -46,4 +48,14 @@ test('constants: SCHEDULER_TIMES should have valid cron expressions', (t) => {
   t.ok(SCHEDULER_TIMES._1M.time.includes('*'))
   t.ok(SCHEDULER_TIMES._5M.time.includes('*'))
   t.ok(SCHEDULER_TIMES._1D.time.includes('*'))
+})
+
+test('constants: DATUM_STATUS should have online and offline values', (t) => {
+  t.is(DATUM_STATUS.ONLINE, 'online')
+  t.is(DATUM_STATUS.OFFLINE, 'offline')
+})
+
+test('constants: DATUM_OFFLINE_ERROR should be a descriptive string', (t) => {
+  t.ok(typeof DATUM_OFFLINE_ERROR === 'string')
+  t.ok(DATUM_OFFLINE_ERROR.length > 0)
 })

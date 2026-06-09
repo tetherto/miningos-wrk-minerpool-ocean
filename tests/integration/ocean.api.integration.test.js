@@ -2,7 +2,7 @@
 
 const test = require('brittle')
 const { createServer } = require('../../mock/server')
-const { OceanMinerPoolApi } = require('../../workers/lib/ocean.minerpool.api')
+const OceanMinerPoolApi = require('../../workers/lib/ocean.minerpool.api')
 const { setTimeout: sleep } = require('timers/promises')
 
 // Mock HTTP client that wraps fetch or http

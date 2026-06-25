@@ -130,13 +130,13 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         unsettled: earnings.unsettled,
         revenue_24h: earnings.revenue,
         estimated_today_income: earnings.income,
-        hashrate: +hashRate.hashrate_60s,
-        hashrate_1h: +hashRate.hashrate_3600s,
-        hashrate_24h: +hashRate.hashrate_86400s,
+        hashrate: +hashRate?.hashrate_60s,
+        hashrate_1h: +hashRate?.hashrate_3600s,
+        hashrate_24h: +hashRate?.hashrate_86400s,
         hashrate_stale_1h: 0,
         hashrate_stale_24h: 0,
         worker_count: this.data.workersData.workers.length,
-        active_workers_count: hashRate.active_worker_count,
+        active_workers_count: hashRate?.active_worker_count,
         yearlyBalances
       })
     }

@@ -42,6 +42,12 @@ class OceanMinerPoolApi {
   async getEarnings (username, startTime) {
     return await this._request(`/v1/earnpay/${username}/${startTime}`)
   }
+
+  // Reachability probe that lets failures propagate, unlike `_request`.
+  async ping () {
+    await this._http.get('/v1/blocks', { encoding: 'json' })
+    return true
+  }
 }
 
 module.exports = OceanMinerPoolApi

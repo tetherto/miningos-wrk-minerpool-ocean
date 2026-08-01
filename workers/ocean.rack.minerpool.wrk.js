@@ -6,6 +6,7 @@ const OceanMinerPoolApi = require('./lib/ocean.minerpool.api')
 const DatumApi = require('./lib/datum.minerpool.api')
 const { getWorkersStats, getTimeRanges, convertMsToSeconds, isCurrentMonth, getMonthlyDateRanges } = require('./lib/utils')
 const { BTC_SATS, SCHEDULER_TIMES, POOL_TYPE, MINUTE_MS, HOUR_MS, HOURS_24_MS, DATUM_OFFLINE_ERROR, DATUM_STATUS } = require('./lib/constants')
+const { buildAlerts } = require('./lib/alerts')
 const utilsStore = require('@tetherto/hp-svc-facs-store/utils')
 const gLibUtilBase = require('@bitfinex/lib-js-util-base')
 const mingo = require('mingo')
@@ -25,7 +26,9 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     this.data = {
       statsData: {},
       workersData: { ts: 0, workers: [] },
-      yearlyBalances: {}
+      yearlyBalances: {},
+      alertsData: { ts: 0, alerts: [] },
+      alertsPrev: {}
     }
   }
 
@@ -72,6 +75,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         this.workersCountDb = db.sub('workers-count')
         this.statsDb = db.sub('stats')
         this.workersDb = db.sub('workers')
+        this.alertsHistoryDb = db.sub('alerts-history')
 
         this.oceanApi = new OceanMinerPoolApi(this.http_0)
         if (this.conf.ocean.datum) {
@@ -92,6 +96,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
       switch (key) {
         case SCHEDULER_TIMES._1M.key:
           await this.fetchStats(time)
+          await this.evaluateAlerts(time.getTime())
           break
         case SCHEDULER_TIMES._5M.key:
           await this.fetchWorkers(time)
@@ -130,13 +135,13 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         unsettled: earnings.unsettled,
         revenue_24h: earnings.revenue,
         estimated_today_income: earnings.income,
-        hashrate: +hashRate.hashrate_60s,
-        hashrate_1h: +hashRate.hashrate_3600s,
-        hashrate_24h: +hashRate.hashrate_86400s,
+        hashrate: +hashRate?.hashrate_60s,
+        hashrate_1h: +hashRate?.hashrate_3600s,
+        hashrate_24h: +hashRate?.hashrate_86400s,
         hashrate_stale_1h: 0,
         hashrate_stale_24h: 0,
         worker_count: this.data.workersData.workers.length,
-        active_workers_count: hashRate.active_worker_count,
+        active_workers_count: hashRate?.active_worker_count,
         yearlyBalances
       })
     }
@@ -428,6 +433,55 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     }
   }
 
+  async getOceanStatus () {
+    try {
+      await this.oceanApi.ping()
+      return DATUM_STATUS.ONLINE
+    } catch (e) {
+      this._logErr('ERR_OCEAN_REACHABILITY', e)
+      return DATUM_STATUS.OFFLINE
+    }
+  }
+
+  async getComponentStatus () {
+    const datum = this.datumApi ? (await this.getDatumStats()).datum.status : null
+    const ocean = await this.getOceanStatus()
+    return { datum, ocean }
+  }
+
+  // Bucket shape `{ ts, alerts: [...] }` is required by the ork's arr_concat aggregation.
+  async _appendAlertHistory (alert) {
+    const key = utilsStore.convIntToBin(alert.createdAt)
+    let entry = { ts: alert.createdAt, alerts: [] }
+    const existing = await this.alertsHistoryDb.get(key)
+    if (existing) entry = JSON.parse(existing.value.toString())
+    if (!entry.alerts.some(a => a.uuid === alert.uuid)) {
+      entry.alerts.push(alert)
+      await this.alertsHistoryDb.put(key, Buffer.from(JSON.stringify(entry)))
+    }
+  }
+
+  async evaluateAlerts (now = Date.now()) {
+    const status = await this.getComponentStatus()
+    this.data.alertStatus = status
+
+    const prev = this.data.alertsPrev || {}
+    const active = buildAlerts(status, prev, now)
+
+    for (const alert of active) {
+      if (!prev[alert.name]) {
+        await this._appendAlertHistory(alert)
+      }
+    }
+
+    const activeByName = {}
+    for (const alert of active) activeByName[alert.name] = alert
+    this.data.alertsPrev = activeByName
+    this.data.alertsData = { ts: now, alerts: active }
+
+    return active
+  }
+
   async getDatumClientStats () {
     try {
       return await this.datumApi.getDecentralizedClientStats()
@@ -520,6 +574,12 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         break
       case 'datum-stats':
         data = await this.getDatumStats()
+        break
+      case 'alerts':
+        data = this.data.alertsData
+        break
+      case 'alerts-history':
+        data = await this.getDbData(this.alertsHistoryDb, query)
         break
       case 'datum-client-stats':
         data = await this.getDatumClientStats()

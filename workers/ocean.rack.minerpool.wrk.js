@@ -203,13 +203,12 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
   async fetchTransactions () {
     try {
       let transactions = []
-      const ts = new Date().setHours(0, 0, 0, 0)
+      const ts = new Date().setHours(0, 0, 0, 0) - HOURS_24_MS
       const start = convertMsToSeconds(ts)
-      const end = convertMsToSeconds(Date.now())
+      const end = convertMsToSeconds(ts + HOURS_24_MS)
       for (const username of this.accounts) {
-        let dailyTransactions = await this.oceanApi.getTransactions(username, start, end)
-        dailyTransactions = dailyTransactions.earnings?.map(t => ({ username, ...t }))
-        transactions = transactions.concat(dailyTransactions)
+        const { earnings = [] } = await this.oceanApi.getTransactions(username, start, end)
+        transactions = transactions.concat(earnings.map(t => ({ username, ...t })))
       }
 
       await this._saveToDb(this.transactionsDb, ts, { ts, transactions })

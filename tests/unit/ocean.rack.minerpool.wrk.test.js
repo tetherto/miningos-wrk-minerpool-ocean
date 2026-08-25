@@ -937,3 +937,26 @@ test('getYearlyBalances: fills balances; handles api errors', async (t) => {
   const bad = await worker.getYearlyBalances('u2')
   t.ok(Array.isArray(bad))
 })
+
+test('fetchTransactions fetches the previous full day', async (t) => {
+  const worker = createMockWorker()
+  let saved
+  worker._saveToDb = async (db, ts, data) => { saved = { ts, data } }
+  worker.transactionsDb = {}
+  worker.fetchTransactions = WrkMinerPoolRackOcean.prototype.fetchTransactions
+  let window
+  worker.oceanApi = {
+    getTransactions: async (username, start, end) => {
+      window = { start, end }
+      return {}
+    }
+  }
+
+  await worker.fetchTransactions()
+
+  const midnight = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000)
+  t.is(window.end, midnight)
+  t.is(window.start, midnight - 24 * 60 * 60)
+  t.is(saved.ts, window.start * 1000)
+  t.alike(saved.data.transactions, [])
+})

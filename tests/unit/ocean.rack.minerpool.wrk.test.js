@@ -775,9 +775,9 @@ test('fetchData: dispatches scheduler keys', async (t) => {
   calls.length = 0
   worker.fetchTransactions = async () => { calls.push('ft') }
   worker.fetchBlocks = async () => { calls.push('fb') }
-  worker.saveWorkers = async () => { calls.push('sw') }
+  worker.fetchYearlyBalances = async () => { calls.push('fyb') }
   await worker.fetchData(SCHEDULER_TIMES._1D.key, new Date())
-  t.ok(calls.includes('ft') && calls.includes('fb') && calls.includes('sw'))
+  t.ok(calls.includes('ft') && calls.includes('fb') && calls.includes('fyb'))
 })
 
 test('fetchData: swallows errors from fetchers', async (t) => {
@@ -800,14 +800,34 @@ test('fetchStats: builds statsData for each account', async (t) => {
     })
   }
   worker.getEarnings = async () => ({ revenue: 1, income: 0.5, unsettled: 0.5 })
-  worker.getYearlyBalances = async () => ([{ month: '1-2025', balance: 0.1 }])
   worker.data.workersData = { workers: [{ id: 'w1' }] }
   worker.fetchStats = WrkMinerPoolRackOcean.prototype.fetchStats
 
   await worker.fetchStats(new Date('2024-06-15T12:00:00.000Z'))
   t.is(worker.data.statsData.stats.length, 2)
   t.is(worker.data.statsData.stats[0].username, 'user1')
-  t.ok(worker.data.statsData.stats[0].yearlyBalances)
+  t.is(worker.data.statsData.stats[0].hashrate, 10)
+})
+
+test('fetchStats: continues with empty hashrate after last retry', async (t) => {
+  const worker = createMockWorker()
+  worker.conf.ocean.apiRetry = 3
+  let calls = 0
+  worker.oceanApi = {
+    getHashRateInfo: async () => {
+      calls++
+      return {}
+    }
+  }
+  worker.getEarnings = async () => ({ revenue: 1, income: 0.5, unsettled: 0.5 })
+  worker.data.workersData = { workers: [] }
+  worker.fetchStats = WrkMinerPoolRackOcean.prototype.fetchStats
+
+  await worker.fetchStats(new Date('2024-06-15T12:00:00.000Z'))
+  t.is(calls, 6)
+  t.is(worker.data.statsData.stats.length, 2)
+  t.ok(Number.isNaN(worker.data.statsData.stats[0].hashrate))
+  t.is(worker.data.statsData.stats[0].active_workers_count, undefined)
 })
 
 test('fetchWorkers: merges workers; logs per-account failures', async (t) => {
@@ -916,4 +936,27 @@ test('getYearlyBalances: fills balances; handles api errors', async (t) => {
   }
   const bad = await worker.getYearlyBalances('u2')
   t.ok(Array.isArray(bad))
+})
+
+test('fetchTransactions fetches the previous full day', async (t) => {
+  const worker = createMockWorker()
+  let saved
+  worker._saveToDb = async (db, ts, data) => { saved = { ts, data } }
+  worker.transactionsDb = {}
+  worker.fetchTransactions = WrkMinerPoolRackOcean.prototype.fetchTransactions
+  let window
+  worker.oceanApi = {
+    getTransactions: async (username, start, end) => {
+      window = { start, end }
+      return {}
+    }
+  }
+
+  await worker.fetchTransactions()
+
+  const midnight = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000)
+  t.is(window.end, midnight)
+  t.is(window.start, midnight - 24 * 60 * 60)
+  t.is(saved.ts, window.start * 1000)
+  t.alike(saved.data.transactions, [])
 })

@@ -105,7 +105,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         case SCHEDULER_TIMES._1D.key:
           await this.fetchTransactions()
           await this.fetchBlocks()
-          await this.saveWorkers(time)
+          await this.fetchYearlyBalances()
           break
       }
     } catch (e) {
@@ -121,32 +121,53 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     console.error(new Date().toISOString(), msg, err)
   }
 
-  async fetchStats (time) {
-    const stats = []
-    for (const username of this.accounts) {
-      const earnings = await this.getEarnings(username)
-      const hashRate = await this.oceanApi.getHashRateInfo(username)
-      const yearlyBalances = await this.getYearlyBalances(username)
-
-      stats.push({
-        username,
-        timestamp: Date.now(),
-        balance: earnings.revenue,
-        unsettled: earnings.unsettled,
-        revenue_24h: earnings.revenue,
-        estimated_today_income: earnings.income,
-        hashrate: +hashRate?.hashrate_60s,
-        hashrate_1h: +hashRate?.hashrate_3600s,
-        hashrate_24h: +hashRate?.hashrate_86400s,
-        hashrate_stale_1h: 0,
-        hashrate_stale_24h: 0,
-        worker_count: this.data.workersData.workers.length,
-        active_workers_count: hashRate?.active_worker_count,
-        yearlyBalances
-      })
+  async fetchYearlyBalances () {
+    try {
+      for (const username of this.accounts) {
+        await this.getYearlyBalances(username)
+      }
+    } catch (e) {
+      this._logErr('ERR_FETCH_YEARLY_BALANCES', e)
     }
+  }
 
-    this.data.statsData = { ts: Math.floor(time.getTime() / 1000) * 1000, stats }
+  async fetchStats (time) {
+    try {
+      const stats = []
+      for (const username of this.accounts) {
+        const earnings = await this.getEarnings(username)
+        const hashRate = await this.fetchHashrate(username)
+
+        stats.push({
+          username,
+          timestamp: Date.now(),
+          balance: earnings.revenue,
+          unsettled: earnings.unsettled,
+          revenue_24h: earnings.revenue,
+          estimated_today_income: earnings.income,
+          hashrate: +hashRate?.hashrate_60s,
+          hashrate_1h: +hashRate?.hashrate_3600s,
+          hashrate_24h: +hashRate?.hashrate_86400s,
+          hashrate_stale_1h: 0,
+          hashrate_stale_24h: 0,
+          worker_count: this.data.workersData.workers.length,
+          active_workers_count: hashRate?.active_worker_count
+        })
+      }
+
+      this.data.statsData = { ts: Math.floor(time.getTime() / 1000) * 1000, stats }
+    } catch (e) {
+      this._logErr('ERR_FETCH_STATS', e)
+    }
+  }
+
+  async fetchHashrate (username) {
+    const retries = this.conf.ocean?.apiRetry || 3
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      const hashrate = await this.oceanApi.getHashRateInfo(username)
+      if (hashrate?.hashrate_60s !== undefined) return hashrate
+    }
+    return {}
   }
 
   async saveStats (time) {
@@ -160,51 +181,62 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
   }
 
   async fetchWorkers (time) {
-    let workers = []
-    for (const username of this.accounts) {
-      try {
-        const accountWorkers = getWorkersStats(await this.oceanApi.getWorkers(username), username)
-        workers = workers.concat(accountWorkers)
-      } catch (e) {
-        this._logErr(`ERR_WORKERS_FETCH ${username}`, e)
+    try {
+      let workers = []
+      for (const username of this.accounts) {
+        try {
+          const accountWorkers = getWorkersStats(await this.oceanApi.getWorkers(username), username)
+          workers = workers.concat(accountWorkers)
+        } catch (e) {
+          this._logErr(`ERR_WORKERS_FETCH ${username}`, e)
+        }
       }
-    }
 
-    const ts = Math.floor(time.getTime() / 1000) * 1000
-    this.data.workersData = { ts, workers }
-    await this._saveToDb(this.workersCountDb, ts, { ts, count: workers.length })
+      const ts = Math.floor(time.getTime() / 1000) * 1000
+      this.data.workersData = { ts, workers }
+      await this._saveToDb(this.workersCountDb, ts, { ts, count: workers.length })
+    } catch (e) {
+      this._logErr('ERR_FETCH_WORKERS', e)
+    }
   }
 
   async fetchTransactions () {
-    let transactions = []
-    const ts = new Date().setHours(0, 0, 0, 0)
-    const start = convertMsToSeconds(ts)
-    const end = convertMsToSeconds(Date.now())
-    for (const username of this.accounts) {
-      let dailyTransactions = await this.oceanApi.getTransactions(username, start, end)
-      dailyTransactions = dailyTransactions.earnings?.map(t => ({ username, ...t }))
-      transactions = transactions.concat(dailyTransactions)
-    }
+    try {
+      let transactions = []
+      const ts = new Date().setHours(0, 0, 0, 0) - HOURS_24_MS
+      const start = convertMsToSeconds(ts)
+      const end = convertMsToSeconds(ts + HOURS_24_MS)
+      for (const username of this.accounts) {
+        const { earnings = [] } = await this.oceanApi.getTransactions(username, start, end)
+        transactions = transactions.concat(earnings.map(t => ({ username, ...t })))
+      }
 
-    await this._saveToDb(this.transactionsDb, ts, { ts, transactions })
+      await this._saveToDb(this.transactionsDb, ts, { ts, transactions })
+    } catch (e) {
+      this._logErr('ERR_FETCH_TRANSACTIONS', e)
+    }
   }
 
   async fetchBlocks () {
-    const resp = await this.oceanApi.getBlocks()
-    if (!resp?.blocks) return
+    try {
+      const resp = await this.oceanApi.getBlocks()
+      if (!resp?.blocks) return
 
-    for (const block of resp.blocks) {
-      const ts = new Date(block.ts).getTime()
-      await this._saveToDb(this.blocksDb, ts, {
-        ts,
-        blockId: block.block_hash,
-        networkDifficulty: block.network_difficulty,
-        poolShares: block.accepted_shares,
-        earnings: block.total_reward_sats / BTC_SATS,
-        luck: block.network_difficulty / block.accepted_shares,
-        luckEarnings100Percent: (block.total_reward_sats / BTC_SATS) / (block.network_difficulty / block.accepted_shares),
-        username: block.username
-      })
+      for (const block of resp.blocks) {
+        const ts = new Date(block.ts).getTime()
+        await this._saveToDb(this.blocksDb, ts, {
+          ts,
+          blockId: block.block_hash,
+          networkDifficulty: block.network_difficulty,
+          poolShares: block.accepted_shares,
+          earnings: block.total_reward_sats / BTC_SATS,
+          luck: block.network_difficulty / block.accepted_shares,
+          luckEarnings100Percent: (block.total_reward_sats / BTC_SATS) / (block.network_difficulty / block.accepted_shares),
+          username: block.username
+        })
+      }
+    } catch (e) {
+      this._logErr('ERR_FETCH_BLOCK', e)
     }
   }
 
@@ -317,7 +349,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
   async getYearlyBalances (username) {
     // fetch transactions of last 12 months, skip the ones already fetched unless current month
     const yearlyDateRanges = getMonthlyDateRanges(12)
-    const balances = this.data.yearlyBalances
+    const balances = this.data.yearlyBalances[username] || {}
     for (const [month, { key }] of Object.entries(yearlyDateRanges)) {
       if (!balances[month] || isCurrentMonth(month)) {
         try {
@@ -329,7 +361,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         }
       }
     }
-    this.data.yearlyBalances = balances
+    this.data.yearlyBalances[username] = balances
     return Object.entries(balances).map(([month, balance]) => ({ month, balance }))
   }
 
@@ -462,24 +494,28 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
   }
 
   async evaluateAlerts (now = Date.now()) {
-    const status = await this.getComponentStatus()
-    this.data.alertStatus = status
+    try {
+      const status = await this.getComponentStatus()
+      this.data.alertStatus = status
 
-    const prev = this.data.alertsPrev || {}
-    const active = buildAlerts(status, prev, now)
+      const prev = this.data.alertsPrev || {}
+      const active = buildAlerts(status, prev, now)
 
-    for (const alert of active) {
-      if (!prev[alert.name]) {
-        await this._appendAlertHistory(alert)
+      for (const alert of active) {
+        if (!prev[alert.name]) {
+          await this._appendAlertHistory(alert)
+        }
       }
+
+      const activeByName = {}
+      for (const alert of active) activeByName[alert.name] = alert
+      this.data.alertsPrev = activeByName
+      this.data.alertsData = { ts: now, alerts: active }
+
+      return active
+    } catch (e) {
+      this._logErr('ERR_EVAL_ALERTS', e)
     }
-
-    const activeByName = {}
-    for (const alert of active) activeByName[alert.name] = alert
-    this.data.alertsPrev = activeByName
-    this.data.alertsData = { ts: now, alerts: active }
-
-    return active
   }
 
   async getDatumClientStats () {

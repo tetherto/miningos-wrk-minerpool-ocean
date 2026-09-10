@@ -95,19 +95,6 @@ function randomNumber (min = 0, max = 1) {
   return parseFloat(number.toFixed(2))
 }
 
-function getDatumStats () {
-  const randomHashrateThs = (100000000000000 + randomNumber() * 10000000000000) / 1000000000000
-  return {
-    type: 'three-stats',
-    refresh: '30s',
-    link: '',
-    items: [
-      { title: 'Connections', text: '10', subtext: 'Worker' },
-      { title: 'Hashrate', text: randomHashrateThs.toString(), subtext: 'Th/s' }
-    ]
-  }
-}
-
 function generateClientStats () {
   let stat = {}
   const acceptedShares = Math.round(randomNumber(100, 2000000))
@@ -316,6 +303,5 @@ module.exports = {
   coinbaser,
   threadStats,
   stratumClientList,
-  configuration,
-  getDatumStats
+  configuration
 }

@@ -10,8 +10,7 @@ const {
   coinbaser,
   threadStats,
   stratumClientList,
-  configuration,
-  getDatumStats
+  configuration
 } = require('./utils')
 
 module.exports = function (CTX) {
@@ -28,7 +27,6 @@ module.exports = function (CTX) {
       workers: 50
     },
     decentralized_client_stats: generateClientStats(),
-    umbrel_api: getDatumStats(),
     stratum_server_info: stratumServerInfo(),
     current_stratum_job: currentStratumJob(),
     coinbaser: coinbaser(),

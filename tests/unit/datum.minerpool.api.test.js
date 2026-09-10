@@ -3,32 +3,6 @@
 const test = require('brittle')
 const DatumApi = require('../../workers/lib/datum.minerpool.api')
 
-test('DatumApi: getDatumStats should call correct endpoint', async (t) => {
-  let calledPath = null
-  const mockHttp = {
-    get: async (path) => {
-      calledPath = path
-      return {
-        body: {
-          result: {
-            items: [
-              { title: 'Connections', text: '5' },
-              { title: 'Hashrate', text: '100000' }
-            ]
-          }
-        }
-      }
-    }
-  }
-
-  const api = new DatumApi(mockHttp)
-  const result = await api.getDatumStats()
-
-  t.is(calledPath, '/umbrel-api')
-  t.ok(result.result)
-  t.ok(Array.isArray(result.result.items))
-})
-
 test('DatumApi: should create instance with http client', (t) => {
   const mockHttp = {
     get: async () => ({ body: {} })

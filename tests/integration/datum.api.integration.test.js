@@ -166,21 +166,6 @@ test('integration: getConfiguration without auth throws missing credentials', as
   )
 })
 
-test('integration: getDatumStats returns umbrel-api mock payload', async (t) => {
-  await ensureServer()
-  const data = await apiClient.getDatumStats()
-
-  t.ok(data.result)
-  t.ok(data.result.items)
-  t.ok(Array.isArray(data.result.items))
-  const connections = data.result.items.find(i => i.title === 'Connections')
-  const hashrate = data.result.items.find(i => i.title === 'Hashrate')
-  t.ok(connections)
-  t.ok(hashrate)
-  t.ok(typeof connections.text === 'string')
-  t.ok(typeof hashrate.text === 'string')
-})
-
 test('integration: concurrent Datum reads', async (t) => {
   await ensureServer()
   const results = await Promise.all([

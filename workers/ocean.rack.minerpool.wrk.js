@@ -438,17 +438,16 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
 
   async getDatumStats () {
     try {
-      const data = await this.datumApi.getDatumStats()
-      const items = data?.result?.items || []
-      const connections = items.find(item => item.title === 'Connections')?.text
-      const hashrate = items.find(item => item.title === 'Hashrate')?.text
+      const data = await this.datumApi.getStratumServerInfo()
+      const info = data?.result || data || {}
+      const { totalConnections: connections, estimatedHashrate: hashrate } = info
       return {
         datum: {
           poolType: POOL_TYPE,
           status: DATUM_STATUS.ONLINE,
           error: null,
-          connections: connections ? Number(connections) : null,
-          hashrate: hashrate ? Number(hashrate) : null
+          connections: connections != null ? Number(connections) : null,
+          hashrate: hashrate != null ? Number(hashrate) : null
         }
       }
     } catch (e) {

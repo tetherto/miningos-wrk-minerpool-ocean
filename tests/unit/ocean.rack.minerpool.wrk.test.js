@@ -599,16 +599,10 @@ test('getWrkExtData: datum-stats, stratum-info, stratum-job, thread-stats', asyn
   worker.getStratumJob = WrkMinerPoolRackOcean.prototype.getStratumJob
   worker.getThreadStats = WrkMinerPoolRackOcean.prototype.getThreadStats
   worker.datumApi = {
-    getDatumStats: async () => ({
-      result: {
-        items: [
-          { title: 'Connections', text: '7' },
-          { title: 'Hashrate', text: '123456' }
-        ]
-      }
-    }),
     getDecentralizedClientStats: async () => ({ dc: 11 }),
-    getStratumServerInfo: async () => ({ s: 2 }),
+    getStratumServerInfo: async () => ({
+      result: { totalConnections: 7, estimatedHashrate: 123456 }
+    }),
     getCurrentStratumJob: async () => ({ j: 3 }),
     getThreadStats: async () => ({ th: 4 })
   }
@@ -622,7 +616,7 @@ test('getWrkExtData: datum-stats, stratum-info, stratum-job, thread-stats', asyn
   t.is(dcs.dc, 11)
 
   const si = await worker.getWrkExtData({ query: { key: 'stratum-info' } })
-  t.is(si.s, 2)
+  t.is(si.result.totalConnections, 7)
 
   const sj = await worker.getWrkExtData({ query: { key: 'stratum-job' } })
   t.is(sj.j, 3)
@@ -658,7 +652,7 @@ test('getDatumStats: returns offline status when datumApi throws', async (t) => 
   worker.getDatumStats = WrkMinerPoolRackOcean.prototype.getDatumStats
   worker._logErr = () => {}
   worker.datumApi = {
-    getDatumStats: async () => {
+    getStratumServerInfo: async () => {
       throw new Error('datum down')
     }
   }
@@ -674,13 +668,8 @@ test('getDatumStats: returns online status with parsed connections and hashrate'
   worker.getDatumStats = WrkMinerPoolRackOcean.prototype.getDatumStats
   worker._logErr = () => {}
   worker.datumApi = {
-    getDatumStats: async () => ({
-      result: {
-        items: [
-          { title: 'Connections', text: '12' },
-          { title: 'Hashrate', text: '999000' }
-        ]
-      }
+    getStratumServerInfo: async () => ({
+      result: { totalConnections: 12, estimatedHashrate: 999000 }
     })
   }
   const out = await worker.getDatumStats()
@@ -690,12 +679,12 @@ test('getDatumStats: returns online status with parsed connections and hashrate'
   t.is(out.datum.hashrate, 999000)
 })
 
-test('getDatumStats: returns null for missing Connections or Hashrate items', async (t) => {
+test('getDatumStats: returns null for missing connections or hashrate fields', async (t) => {
   const worker = createMockWorker()
   worker.getDatumStats = WrkMinerPoolRackOcean.prototype.getDatumStats
   worker._logErr = () => {}
   worker.datumApi = {
-    getDatumStats: async () => ({ result: { items: [] } })
+    getStratumServerInfo: async () => ({ result: {} })
   }
   const out = await worker.getDatumStats()
   t.is(out.datum.status, 'online')
@@ -708,7 +697,7 @@ test('getDatumStats: handles null/undefined result gracefully', async (t) => {
   worker.getDatumStats = WrkMinerPoolRackOcean.prototype.getDatumStats
   worker._logErr = () => {}
   worker.datumApi = {
-    getDatumStats: async () => null
+    getStratumServerInfo: async () => null
   }
   const out = await worker.getDatumStats()
   t.is(out.datum.status, 'online')

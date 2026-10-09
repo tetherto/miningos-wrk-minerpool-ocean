@@ -30,7 +30,9 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
       alertsData: { ts: 0, alerts: [] },
       alertsPrev: {}
     }
-    this.lastSavedHashrateTs = 0
+    // Per-account watermarks: accounts share hour timestamps, so a single
+    // cursor would mark every account after the first as already saved.
+    this.lastSavedHashrateTs = {}
   }
 
   init () {
@@ -142,7 +144,13 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     try {
       const stats = []
       for (const username of this.accounts) {
-        const earnings = await this.getEarnings(username)
+        let earnings
+        try {
+          earnings = await this.getEarnings(username)
+        } catch (e) {
+          this._logErr('ERR_FETCH_EARNINGS', e)
+          earnings = { revenue: 0, income: 0, unsettled: 0 }
+        }
         const hashRate = await this.fetchHashrate(username)
 
         stats.push({
@@ -157,7 +165,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
           hashrate_24h: +hashRate?.hashrate_86400s,
           hashrate_stale_1h: 0,
           hashrate_stale_24h: 0,
-          worker_count: this.data.workersData.workers.length,
+          worker_count: this.data.workersData.workers.filter(w => w.username === username).length,
           active_workers_count: hashRate?.active_worker_count
         })
       }
@@ -186,22 +194,37 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         const history = data?.hashrate_history
         if (!history) continue
 
+        const lastSavedTs = this.lastSavedHashrateTs[username] || 0
+        let maxTs = lastSavedTs
         for (const dateString in history) {
           const ts = new Date(`${dateString}Z`).getTime()
           if (ts % HOUR_MS !== 0) continue
-          if (this.lastSavedHashrateTs < ts) {
-            await this._saveToDb(
-              this.hashrateHistoryDb,
-              ts,
-              { ts, username, hashrate: history[dateString] }
-            )
-            this.lastSavedHashrateTs = ts
-          }
+          if (ts <= lastSavedTs) continue
+          await this._mergeHashrateHistory(ts, username, history[dateString])
+          if (ts > maxTs) maxTs = ts
         }
+        this.lastSavedHashrateTs[username] = maxTs
       }
     } catch (e) {
       this._logErr('ERR_FETCH_HASHRATE_HISTORY', e)
     }
+  }
+
+  // One row per hour shared by every account: the key is the bare timestamp,
+  // so per-account rows would overwrite each other.
+  async _mergeHashrateHistory (ts, username, hashrate) {
+    const key = utilsStore.convIntToBin(ts)
+    const existing = await this.hashrateHistoryDb.get(key)
+    let entry = { ts, entries: [] }
+    if (existing) {
+      const row = JSON.parse(existing.value.toString())
+      // Rows written before multi-account support hold a single inline sample.
+      entry = row.entries ? row : { ts: row.ts, entries: [{ username: row.username, hashrate: row.hashrate }] }
+    }
+    const sample = entry.entries.find(e => e.username === username)
+    if (sample) sample.hashrate = hashrate
+    else entry.entries.push({ username, hashrate })
+    await this.hashrateHistoryDb.put(key, Buffer.from(JSON.stringify(entry)))
   }
 
   async fetchEarnings (username, start, end) {
@@ -265,11 +288,27 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
       // save transaction ts to be able to aggregate for different timezones
       for (const transaction of transactions) {
         const ts = new Date(transaction.ts).getTime()
-        await this._saveToDb(this.transactionsDb, ts, { ts, transactions: [transaction] })
+        await this._appendTransaction(ts, transaction)
       }
     } catch (e) {
       this._logErr('ERR_FETCH_TRANSACTIONS', e)
     }
+  }
+
+  // Accounts earn on the same blocks, so their transactions share timestamps;
+  // a plain put would keep only whichever account was written last.
+  async _appendTransaction (ts, transaction) {
+    const key = utilsStore.convIntToBin(ts)
+    const existing = await this.transactionsDb.get(key)
+    const entry = existing ? JSON.parse(existing.value.toString()) : { ts, transactions: [] }
+    const seen = entry.transactions.some(t =>
+      t.username === transaction.username &&
+      t.satoshis_net_earned === transaction.satoshis_net_earned &&
+      t.block_hash === transaction.block_hash
+    )
+    if (seen) return
+    entry.transactions.push(transaction)
+    await this.transactionsDb.put(key, Buffer.from(JSON.stringify(entry)))
   }
 
   async fetchBlocks () {
@@ -423,7 +462,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
   async getEarnings (username) {
     let revenue = 0; let income = 0
     const time24HoursAgo = convertMsToSeconds(Date.now() - 24 * 60 * 60 * 1000)
-    const data = this.oceanApi.getEarnings(username, time24HoursAgo)
+    const data = (await this.oceanApi.getEarnings(username, time24HoursAgo)) || {}
 
     data.earnings?.forEach(earning => {
       revenue += earning.satoshis_net_earned
@@ -435,7 +474,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
 
     return {
       revenue: revenue / BTC_SATS,
-      income,
+      income: income / BTC_SATS,
       unsettled: (revenue - income) / BTC_SATS
     }
   }
@@ -663,9 +702,14 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         if (query.interval) data = this._aggrByInterval(data, query.interval)
         data.forEach(d => { if (d.stats) d.stats = this.appendPoolType(d.stats) })
         break
-      case 'hashrate-history':
-        data = { hashrateHistory: this.appendPoolType(await this.getDbData(this.hashrateHistoryDb, query)) }
+      case 'hashrate-history': {
+        const rows = await this.getDbData(this.hashrateHistoryDb, query)
+        const flat = rows.flatMap(row => row.entries
+          ? row.entries.map(e => ({ ts: row.ts, username: e.username, hashrate: e.hashrate }))
+          : [row])
+        data = { hashrateHistory: this.appendPoolType(flat) }
         break
+      }
       case 'datum-stats':
         data = await this.getDatumStats()
         break

@@ -50,7 +50,7 @@
   "devDependencies": {
     "brittle": "3.16.3",
     "debug": "4.3.4",
-    "fastify": "5.8.5",
+    "fastify": "5.12.5",
     "standard": "17.1.2",
     "yargs": "17.7.2"
   }

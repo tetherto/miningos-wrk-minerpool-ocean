@@ -10,8 +10,11 @@ const SCHEDULER_TIMES = {
   _1M: { time: '0 */1 * * * *', key: '1m' },
   _5M: { time: '0 */5 * * * *', key: '5m' },
   _30M: { time: '0 */30 * * * *', key: '30m' },
-  _1D: { time: '0 0 0 * * *', key: '1D' }
+  _1D: { time: '0 0 0 * * *', key: '1D' },
+  _RT: { time: '15,45 * * * * *', key: 'rt' }
 }
+
+const REALTIME_RETENTION_DAYS = 14
 
 const DATUM_STATUS = {
   OFFLINE: 'offline',
@@ -26,6 +29,7 @@ module.exports = {
   HOUR_MS,
   HOURS_24_MS,
   SCHEDULER_TIMES,
+  REALTIME_RETENTION_DAYS,
   POOL_TYPE,
   DATUM_STATUS,
   DATUM_OFFLINE_ERROR

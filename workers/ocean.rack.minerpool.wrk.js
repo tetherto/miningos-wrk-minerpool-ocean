@@ -5,11 +5,17 @@ const TetherWrkBase = require('@tetherto/tether-wrk-base/workers/base.wrk.tether
 const OceanMinerPoolApi = require('./lib/ocean.minerpool.api')
 const DatumApi = require('./lib/datum.minerpool.api')
 const { getWorkersStats, getTimeRanges, convertMsToSeconds, isCurrentMonth, getMonthlyDateRanges, formatDate } = require('./lib/utils')
-const { BTC_SATS, SCHEDULER_TIMES, POOL_TYPE, MINUTE_MS, HOUR_MS, HOURS_24_MS, DATUM_OFFLINE_ERROR, DATUM_STATUS } = require('./lib/constants')
+const { BTC_SATS, SCHEDULER_TIMES, POOL_TYPE, MINUTE_MS, HOUR_MS, HOURS_24_MS, DATUM_OFFLINE_ERROR, DATUM_STATUS, REALTIME_RETENTION_DAYS } = require('./lib/constants')
 const { buildAlerts } = require('./lib/alerts')
 const utilsStore = require('@tetherto/hp-svc-facs-store/utils')
 const gLibUtilBase = require('@bitfinex/lib-js-util-base')
 const mingo = require('mingo')
+
+const toFiniteNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
 
 class WrkMinerPoolRackOcean extends TetherWrkBase {
   constructor (conf, ctx) {
@@ -33,6 +39,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     // Per-account watermarks: accounts share hour timestamps, so a single
     // cursor would mark every account after the first as already saved.
     this.lastSavedHashrateTs = {}
+    this.lastRealtimeSnapTs = {}
   }
 
   init () {
@@ -42,6 +49,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     const { accounts, apiUrl, datum, apiRetry } = this.conf.ocean
     this.accounts = accounts
     this.apiRetries = apiRetry || 3
+    this.realtimeRetentionDays = this.conf.ocean.realtimeRetentionDays || REALTIME_RETENTION_DAYS
 
     this.setInitFacs([
       ['fac', '@bitfinex/bfx-facs-scheduler', '0', 'ocean', {}, -10],
@@ -80,6 +88,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         this.workersCountDb = db.sub('workers-count')
         this.statsDb = db.sub('stats')
         this.hashrateHistoryDb = db.sub('hashrate-history')
+        this.realtimeHashrateDb = db.sub('hashrate-1m')
         this.workersDb = db.sub('workers')
         this.alertsHistoryDb = db.sub('alerts-history')
 
@@ -115,6 +124,10 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
           await this.fetchTransactions(time)
           await this.fetchBlocks()
           await this.fetchYearlyBalances()
+          await this.pruneRealtimeHashrate(time.getTime())
+          break
+        case SCHEDULER_TIMES._RT.key:
+          await this.fetchRealtimeHashrate()
           break
       }
     } catch (e) {
@@ -225,6 +238,80 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     if (sample) sample.hashrate = hashrate
     else entry.entries.push({ username, hashrate })
     await this.hashrateHistoryDb.put(key, Buffer.from(JSON.stringify(entry)))
+  }
+
+  async fetchRealtimeHashrate () {
+    if (this._fetchingRealtimeHashrate) return
+    this._fetchingRealtimeHashrate = true
+
+    try {
+      const samples = new Map()
+      for (const username of this.accounts) {
+        const info = await this.oceanApi.getHashRateInfo(username)
+        const snapSec = toFiniteNumber(info?.snap_ts)
+        const snapTs = snapSec === null ? null : snapSec * 1000
+        const hashrate = toFiniteNumber(info?.hashrate_60s)
+        if (snapTs === null || hashrate === null) continue
+        if (snapTs <= (this.lastRealtimeSnapTs[username] || 0)) continue
+
+        if (!samples.has(snapTs)) samples.set(snapTs, [])
+        samples.get(snapTs).push({ username, hashrate })
+      }
+
+      for (const [ts, entries] of samples) {
+        await this._mergeRealtimeHashrate(ts, entries)
+        for (const { username } of entries) {
+          this.lastRealtimeSnapTs[username] = Math.max(this.lastRealtimeSnapTs[username] || 0, ts)
+        }
+      }
+    } catch (e) {
+      this._logErr('ERR_FETCH_REALTIME_HASHRATE', e)
+    } finally {
+      this._fetchingRealtimeHashrate = false
+    }
+  }
+
+  async _mergeRealtimeHashrate (ts, samples) {
+    const key = utilsStore.convIntToBin(ts)
+    const existing = await this.realtimeHashrateDb.get(key)
+    const entry = existing
+      ? JSON.parse(existing.value.toString())
+      : { ts, accounts: [...this.accounts], entries: [] }
+
+    for (const { username, hashrate } of samples) {
+      const sample = entry.entries.find(e => e.username === username)
+      if (sample) sample.hashrate = hashrate
+      else entry.entries.push({ username, hashrate })
+    }
+
+    await this.realtimeHashrateDb.put(key, Buffer.from(JSON.stringify(entry)))
+  }
+
+  async pruneRealtimeHashrate (now) {
+    try {
+      const cutoff = now - this.realtimeRetentionDays * HOURS_24_MS
+      const stream = this.realtimeHashrateDb.createReadStream({ lt: utilsStore.convIntToBin(cutoff) })
+      const keys = []
+      for await (const entry of stream) keys.push(entry.key)
+      if (!keys.length) return
+
+      for (const key of keys) await this.realtimeHashrateDb.del(key)
+    } catch (e) {
+      this._logErr('ERR_PRUNE_REALTIME_HASHRATE', e)
+    }
+  }
+
+  _getRealtimeHashrate (rows) {
+    return rows.map(row => {
+      const accounts = row.accounts || row.entries.map(e => e.username)
+      return {
+        ts: row.ts,
+        stats: this.appendPoolType(accounts.map(username => ({
+          username,
+          hashrate: row.entries.find(e => e.username === username)?.hashrate ?? null
+        })))
+      }
+    })
   }
 
   async fetchEarnings (username, start, end) {
@@ -701,6 +788,9 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
         data = await this.getDbData(this.statsDb, query)
         if (query.interval) data = this._aggrByInterval(data, query.interval)
         data.forEach(d => { if (d.stats) d.stats = this.appendPoolType(d.stats) })
+        break
+      case 'hashrate-1m':
+        data = this._getRealtimeHashrate(await this.getDbData(this.realtimeHashrateDb, query))
         break
       case 'hashrate-history': {
         const rows = await this.getDbData(this.hashrateHistoryDb, query)

@@ -6,5 +6,6 @@
     "user": "",
     "password": ""
   },
-  "apiRetry": 3
+  "apiRetry": 3,
+  "realtimeRetentionDays": 14
 }

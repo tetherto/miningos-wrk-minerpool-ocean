@@ -48,6 +48,11 @@ test('getWorkersStats: should transform worker data correctly', (t) => {
   t.is(result[1].hashrate, 0)
 })
 
+test('getWorkersStats: should return no workers when Ocean has no data for the account', (t) => {
+  t.alike(getWorkersStats(undefined, 'idleuser'), [])
+  t.alike(getWorkersStats({}, 'idleuser'), [])
+})
+
 test('getWorkersStats: should handle empty workers object', (t) => {
   const data = {
     workers: {},

@@ -40,6 +40,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     // cursor would mark every account after the first as already saved.
     this.lastSavedHashrateTs = {}
     this.lastRealtimeSnapTs = {}
+    this.inactiveAccounts = new Set()
   }
 
   init () {
@@ -246,8 +247,15 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
 
     try {
       const samples = new Map()
+      const inactive = []
       for (const username of this.accounts) {
         const info = await this.oceanApi.getHashRateInfo(username)
+        if (info?.inactive) {
+          inactive.push(username)
+          this._trackInactiveAccount(username, true)
+          continue
+        }
+        if (toFiniteNumber(info?.snap_ts) !== null) this._trackInactiveAccount(username, false)
         const snapSec = toFiniteNumber(info?.snap_ts)
         const snapTs = snapSec === null ? null : snapSec * 1000
         const hashrate = toFiniteNumber(info?.hashrate_60s)
@@ -256,6 +264,10 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
 
         if (!samples.has(snapTs)) samples.set(snapTs, [])
         samples.get(snapTs).push({ username, hashrate })
+      }
+
+      for (const entries of samples.values()) {
+        for (const username of inactive) entries.push({ username, hashrate: 0 })
       }
 
       for (const [ts, entries] of samples) {
@@ -269,6 +281,17 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
     } finally {
       this._fetchingRealtimeHashrate = false
     }
+  }
+
+  _trackInactiveAccount (username, inactive) {
+    if (!this.inactiveAccounts) this.inactiveAccounts = new Set()
+    if (!inactive) {
+      this.inactiveAccounts.delete(username)
+      return
+    }
+    if (this.inactiveAccounts.has(username)) return
+    this.inactiveAccounts.add(username)
+    console.warn(new Date().toISOString(), 'WARN_OCEAN_ACCOUNT_INACTIVE', username)
   }
 
   async _mergeRealtimeHashrate (ts, samples) {
@@ -325,6 +348,7 @@ class WrkMinerPoolRackOcean extends TetherWrkBase {
   async fetchHashrate (username) {
     for (let attempt = 1; attempt <= (this.apiRetries || 3); attempt++) {
       const hashrate = await this.oceanApi.getHashRateInfo(username)
+      if (hashrate?.inactive) return {}
       if (hashrate?.hashrate_60s !== undefined) return hashrate
     }
     return {}

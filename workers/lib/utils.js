@@ -3,7 +3,7 @@
 const { HOUR_MS, HOURS_24_MS } = require('./constants')
 
 const getWorkersStats = (data, username) => {
-  return Object.entries(data.workers).map(([name, [worker]]) => {
+  return Object.entries(data?.workers || {}).map(([name, [worker]]) => {
     return {
       username,
       id: name,

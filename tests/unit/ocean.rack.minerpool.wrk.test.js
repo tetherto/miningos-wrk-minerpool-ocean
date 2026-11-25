@@ -864,6 +864,27 @@ test('fetchStats: continues with empty hashrate after last retry', async (t) => 
   t.is(worker.data.statsData.stats[0].active_workers_count, undefined)
 })
 
+test('fetchStats: does not retry an account Ocean reports as inactive', async (t) => {
+  const worker = createMockWorker()
+  worker.conf.ocean.apiRetry = 3
+  let calls = 0
+  worker.oceanApi = {
+    getHashRateInfo: async () => {
+      calls++
+      return { inactive: true }
+    }
+  }
+  worker.getEarnings = async () => ({ revenue: 1, income: 0.5, unsettled: 0.5 })
+  worker.data.workersData = { workers: [] }
+  worker.fetchStats = WrkMinerPoolRackOcean.prototype.fetchStats
+
+  await worker.fetchStats(new Date('2024-06-15T12:00:00.000Z'))
+  t.is(calls, 2)
+  t.is(worker.data.statsData.stats.length, 2)
+  t.ok(Number.isNaN(worker.data.statsData.stats[0].hashrate))
+  t.is(worker.data.statsData.stats[0].active_workers_count, undefined)
+})
+
 test('fetchStats: worker_count only counts the account\'s own workers', async (t) => {
   const worker = createMockWorker()
   worker.oceanApi = {
